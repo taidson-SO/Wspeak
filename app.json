@@ -1,15 +1,26 @@
 {
   "expo": {
-    "name": "wspeak",
+    "name": "WSpeak",
     "slug": "wspeak",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
-    "ios": {
-      "supportsTablet": true
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F2F7FB"
     },
+    "userInterfaceStyle": "light",
     "android": {
+      "package": "com.wspeak.app",
+      "versionCode": 1,
+      "permissions": [
+        "RECORD_AUDIO",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -18,8 +29,31 @@
       },
       "predictiveBackGestureEnabled": false
     },
+    "plugins": [
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "O WSpeak precisa do microfone para gravar sua fala e reconhecer suas palavras.",
+          "recordAudioAndroid": true
+        }
+      ]
+    ],
+    "ios": {
+      "bundleIdentifier": "com.wspeak.app",
+      "buildNumber": "1",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "O WSpeak precisa do microfone para gravar sua fala e reconhecer suas palavras."
+      }
+    },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "59110573-6b86-4365-9c33-218042326082"
+      }
+    },
+    "owner": "soulinux.org"
   }
 }
