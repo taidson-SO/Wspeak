@@ -28,6 +28,20 @@ type Props = {
   onOpenTraining: () => void;
 };
 
+function logRecognitionResultInDevelopment(result: RecognitionResult) {
+  if (!__DEV__) {
+    return;
+  }
+
+  console.log('Resultado do reconhecimento personalizado', {
+    predictedWord: result.predictedWord,
+    confidence: result.confidence,
+    matchedWordId: result.matchedWordId,
+    secondBestWord: result.secondBestWord ?? null,
+    confidenceMargin: result.confidenceMargin ?? null,
+  });
+}
+
 export function CommunicationScreen({ trainedWords, onBack, onOpenTraining }: Props) {
   const [status, setStatus] = useState('Aguardando');
   const [isRecording, setIsRecording] = useState(false);
@@ -41,6 +55,7 @@ export function CommunicationScreen({ trainedWords, onBack, onOpenTraining }: Pr
 
   useEffect(() => {
     return () => {
+      stopSpeechAsync();
       stopOpenCaptureAsync();
     };
   }, []);
@@ -60,6 +75,7 @@ export function CommunicationScreen({ trainedWords, onBack, onOpenTraining }: Pr
     }
 
     await stopOpenCaptureAsync();
+    stopSpeechAsync();
     setIsRecording(false);
     setIsPreparing(false);
     setIsRecognizing(false);
@@ -124,10 +140,18 @@ export function CommunicationScreen({ trainedWords, onBack, onOpenTraining }: Pr
       setIsProcessing(true);
       setIsRecognizing(true);
       setStatus('Reconhecendo');
-      const pcmBuffer = isPcmExperimentActive ? await pcmSession?.stopPcmCaptureAsync() ?? getCapturedPcmBuffer() : null;
+      const pcmBuffer = isPcmExperimentActive
+        ? await pcmSession
+            ?.stopPcmCaptureAsync()
+            .catch((pcmError) => {
+              console.warn('Falha ao finalizar a captura PCM da comunicação.', pcmError);
+              return getCapturedPcmBuffer();
+            }) ?? getCapturedPcmBuffer()
+        : null;
       const audioUri = isPcmExperimentActive ? null : await stopAudioRecordingAsync();
       const recognitionResult = await personalizedSpeechRecognizer.recognizeAsync(audioUri, trainedWords, pcmBuffer);
       setResult(recognitionResult);
+      logRecognitionResultInDevelopment(recognitionResult);
 
       if (canSpeakRecognitionResult(recognitionResult)) {
         setStatus('Reproduzindo');

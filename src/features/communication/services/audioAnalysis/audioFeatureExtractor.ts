@@ -1,11 +1,14 @@
 import * as FileSystem from 'expo-file-system/legacy';
 
-import type { AudioFeatureExtractionResult, AudioFeatureVector, PcmAudioBuffer } from './audioTypes';
+import type { AudioFeatureExtractionResult, AudioFeatureVector, AudioFrameFeature, PcmAudioBuffer } from './audioTypes';
 
 const WAV_HEADER_MIN_SIZE = 44;
 const ENVELOPE_SEGMENTS = 8;
 const SILENCE_FLOOR = 0.015;
 const MIN_TRIMMED_SAMPLE_COUNT = 256;
+const TARGET_FRAME_DURATION_MS = 45;
+const MIN_TEMPORAL_FRAMES = 6;
+const MAX_TEMPORAL_FRAMES = 48;
 
 function createUnsupported(
   reason: 'PCM_NOT_AVAILABLE' | 'UNSUPPORTED_FORMAT' | 'INVALID_AUDIO',
@@ -129,6 +132,18 @@ function createSegments(samples: number[], segmentCount: number) {
   });
 }
 
+function calculateAverageAmplitude(samples: number[]) {
+  if (!samples.length) {
+    return 0;
+  }
+
+  return samples.reduce((sum, sample) => sum + Math.abs(sample), 0) / samples.length;
+}
+
+function calculateMaxAmplitude(samples: number[]) {
+  return samples.reduce((maxValue, sample) => Math.max(maxValue, Math.abs(sample)), 0);
+}
+
 function calculateZeroCrossingRate(samples: number[]) {
   if (samples.length <= 1) {
     return 0;
@@ -159,6 +174,28 @@ function calculateRmsEnergy(samples: number[]) {
   return Math.sqrt(squaredAmplitudeSum / samples.length);
 }
 
+function createTemporalFrames(samples: number[], sampleRate: number): AudioFrameFeature[] {
+  if (samples.length < MIN_TRIMMED_SAMPLE_COUNT || sampleRate <= 0) {
+    return [];
+  }
+
+  const targetFrameSamples = Math.max(1, Math.round((sampleRate * TARGET_FRAME_DURATION_MS) / 1000));
+  const estimatedFrameCount = Math.max(MIN_TEMPORAL_FRAMES, Math.ceil(samples.length / targetFrameSamples));
+  const frameCount = Math.min(MAX_TEMPORAL_FRAMES, estimatedFrameCount);
+  const frameSegments = createSegments(samples, frameCount);
+
+  // DTW compares every frame pair. Capping to 48 keeps each sample comparison under
+  // 2304 frame distances, which is small enough for repeated local recognition.
+  return frameSegments.map((frameSamples, frameIndex) => ({
+    relativeStart: frameIndex / frameCount,
+    relativeDuration: 1 / frameCount,
+    averageAmplitude: calculateAverageAmplitude(frameSamples),
+    maxAmplitude: calculateMaxAmplitude(frameSamples),
+    rmsEnergy: calculateRmsEnergy(frameSamples),
+    zeroCrossingRate: calculateZeroCrossingRate(frameSamples),
+  }));
+}
+
 function calculateFeaturesFromSamples(samples: number[], sampleRate: number, originalDurationMs?: number): AudioFeatureVector {
   if (!samples.length) {
     return {
@@ -171,6 +208,7 @@ function calculateFeaturesFromSamples(samples: number[], sampleRate: number, ori
       zeroCrossingRate: 0,
       energyEnvelope: Array(ENVELOPE_SEGMENTS).fill(0),
       zeroCrossingEnvelope: Array(ENVELOPE_SEGMENTS).fill(0),
+      frames: [],
       sampleCount: 0,
     };
   }
@@ -178,8 +216,8 @@ function calculateFeaturesFromSamples(samples: number[], sampleRate: number, ori
   const clampedSamples = samples.map(clampSample);
   const trimmedSamples = trimSilence(clampedSamples);
   const normalizedSamples = normalizeVolume(trimmedSamples);
-  const absoluteAmplitudeSum = normalizedSamples.reduce((sum, sample) => sum + Math.abs(sample), 0);
-  const maxAmplitude = normalizedSamples.reduce((maxValue, sample) => Math.max(maxValue, Math.abs(sample)), 0);
+  const averageAmplitude = calculateAverageAmplitude(normalizedSamples);
+  const maxAmplitude = calculateMaxAmplitude(normalizedSamples);
   const segments = createSegments(normalizedSamples, ENVELOPE_SEGMENTS);
   const rawEnergyEnvelope = segments.map(calculateRmsEnergy);
   const maxSegmentEnergy = rawEnergyEnvelope.reduce((maxValue, energy) => Math.max(maxValue, energy), 0);
@@ -191,12 +229,13 @@ function calculateFeaturesFromSamples(samples: number[], sampleRate: number, ori
     durationMs,
     activeDurationMs,
     silenceRatio: Math.max(0, Math.min(1, 1 - trimmedSamples.length / samples.length)),
-    averageAmplitude: absoluteAmplitudeSum / normalizedSamples.length,
+    averageAmplitude,
     maxAmplitude,
     rmsEnergy: calculateRmsEnergy(normalizedSamples),
     zeroCrossingRate: calculateZeroCrossingRate(normalizedSamples),
     energyEnvelope,
     zeroCrossingEnvelope: segments.map(calculateZeroCrossingRate),
+    frames: createTemporalFrames(normalizedSamples, sampleRate),
     sampleCount: trimmedSamples.length,
   };
 }

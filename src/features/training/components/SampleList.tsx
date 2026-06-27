@@ -36,7 +36,7 @@ export function SampleList({ samples, onDelete }: Props) {
             <Text variant="label">Amostra {index + 1}</Text>
             <Text variant="caption">{new Date(sample.createdAt).toLocaleString('pt-BR')}</Text>
             <Text variant="caption">{getAnalysisLabel(sample.analysisStatus)}</Text>
-            {sample.analysisStatus === 'error' && sample.analysisMessage ? <Text variant="caption">{sample.analysisMessage}</Text> : null}
+            {sample.analysisStatus !== 'ready' && sample.analysisMessage ? <Text variant="caption">{sample.analysisMessage}</Text> : null}
           </View>
           <Pressable
             onPress={() => onDelete(sample.id)}

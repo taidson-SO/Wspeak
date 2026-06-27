@@ -19,6 +19,10 @@ function normalizeForComparison(text: string) {
     .replace(/[\u0300-\u036f]/g, '');
 }
 
+export function isCustomWord(word: Word): boolean {
+  return word.isCustom === true || word.id.startsWith('custom-');
+}
+
 function normalizeCustomWord(word: Word): Word {
   return {
     ...word,
@@ -49,16 +53,47 @@ function validateWordText(text: string, existingWords: Word[], editingWordId?: s
   return null;
 }
 
+function dedupeWords(words: Word[], existingWords: Word[] = []): Word[] {
+  const seen = new Set(existingWords.map((word) => normalizeForComparison(word.text)));
+  const nextWords: Word[] = [];
+
+  words.forEach((word) => {
+    const comparisonText = normalizeForComparison(word.text);
+
+    if (!comparisonText || seen.has(comparisonText)) {
+      return;
+    }
+
+    seen.add(comparisonText);
+    nextWords.push(word);
+  });
+
+  return nextWords;
+}
+
+function areWordListsEqual(left: Word[], right: Word[]) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+export function buildWordList(customWords: Word[]): Word[] {
+  return [...suggestedWords, ...customWords];
+}
+
 export const wordRepository = {
   async loadCustomWords(): Promise<Word[]> {
-    const customWords = await getJsonValue<Word[]>(STORAGE_KEY, []);
+    const storedWords = await getJsonValue<Word[]>(STORAGE_KEY, []);
+    const customWords = dedupeWords(storedWords.filter(isCustomWord).map(normalizeCustomWord), suggestedWords);
 
-    return customWords.map(normalizeCustomWord);
+    if (!areWordListsEqual(storedWords, customWords)) {
+      await setJsonValue(STORAGE_KEY, customWords);
+    }
+
+    return customWords;
   },
 
   async loadWords(): Promise<Word[]> {
     const customWords = await this.loadCustomWords();
-    return [...suggestedWords, ...customWords];
+    return buildWordList(customWords);
   },
 
   async addCustomWord(text: string): Promise<Word[]> {
@@ -81,7 +116,7 @@ export const wordRepository = {
     ];
 
     await setJsonValue(STORAGE_KEY, nextWords);
-    return [...suggestedWords, ...nextWords];
+    return buildWordList(nextWords);
   },
 
   async updateCustomWord(wordId: string, text: string): Promise<Word[]> {
@@ -99,22 +134,30 @@ export const wordRepository = {
       throw new Error(validationError);
     }
 
-    const nextWords = customWords.map((word) => (word.id === wordId ? { ...word, text: normalizeWordText(text) } : word));
+    const nextWords = customWords.map((word) =>
+      word.id === wordId ? { ...word, text: normalizeWordText(text), isCustom: true } : word,
+    );
 
     await setJsonValue(STORAGE_KEY, nextWords);
-    return [...suggestedWords, ...nextWords];
+    return buildWordList(nextWords);
   },
 
   async removeCustomWord(wordId: string): Promise<Word[]> {
     const customWords = await this.loadCustomWords();
+    const currentWord = customWords.find((word) => word.id === wordId);
+
+    if (!currentWord) {
+      throw new Error('Essa palavra personalizada não existe mais.');
+    }
+
     const nextWords = customWords.filter((word) => word.id !== wordId);
 
     await setJsonValue(STORAGE_KEY, nextWords);
-    return [...suggestedWords, ...nextWords];
+    return buildWordList(nextWords);
   },
 
   async clearCustomWords(): Promise<Word[]> {
     await removeValue(STORAGE_KEY);
-    return suggestedWords;
+    return buildWordList([]);
   },
 };

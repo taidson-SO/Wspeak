@@ -19,7 +19,8 @@ Quando existe PCM/WAV analisavel, o app extrai features leves do proprio sinal:
 - amplitude media, pico de amplitude e energia RMS;
 - taxa global de cruzamento por zero;
 - envelope de energia em 8 segmentos;
-- envelope de cruzamento por zero em 8 segmentos.
+- envelope de cruzamento por zero em 8 segmentos;
+- frames temporais curtos com energia, amplitude e cruzamento por zero.
 
 Antes de calcular essas features, o sinal e normalizado por volume e tem silencio inicial/final descartado quando ha amostras suficientes. Isso reduz diferencas simples de distancia do microfone e pausas antes/depois da fala.
 
@@ -28,10 +29,12 @@ Antes de calcular essas features, o sinal e normalizado por volume e tem silenci
 Para cada palavra treinada, o app compara a fala atual com cada amostra analisavel da palavra. A pontuacao final combina:
 
 - melhor amostra da palavra;
-- media das amostras;
-- consistencia entre as amostras.
+- media das melhores amostras;
+- consistencia entre as melhores amostras.
 
 Isso evita depender apenas de uma media simples e ajuda quando uma amostra treinada ficou pior que as outras.
+
+Quando a fala atual e a amostra treinada possuem frames temporais, a comparacao usa DTW (Dynamic Time Warping). O DTW alinha sequencias de frames para tolerar pequenas variacoes de ritmo, velocidade e duracao relativa das partes da palavra. Quando uma amostra antiga possui apenas features globais, o app usa automaticamente a comparacao global anterior.
 
 ## Fluxo atual
 
@@ -70,7 +73,7 @@ A revisao completa esta em `docs/revisao-abordagem-reconhecimento.md`.
 ## Limites conhecidos do algoritmo
 
 - O algoritmo ainda e leve e heuristico; ele nao substitui um modelo fonetico ou acustico treinado.
-- Ainda nao ha MFCC, DTW ou alinhamento temporal avancado.
+- Nao ha MFCC real nem modelo acustico treinado; a comparacao temporal usa DTW leve sobre energia, amplitude e cruzamento por zero.
 - O limiar de confianca ainda precisa ser calibrado com mais palavras e usuarios reais.
 - Palavras com duracao, energia e envelope parecidos ainda podem gerar falsos positivos.
 - Fala muito baixa, muito curta ou com muito ruido pode produzir baixa confianca mesmo com PCM valido.

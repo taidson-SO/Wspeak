@@ -10,7 +10,7 @@ import { startAudioRecordingAsync, stopActiveAudioRecordingAsync, stopAudioRecor
 import { SampleList } from '../components/SampleList';
 import { SampleRecorder } from '../components/SampleRecorder';
 import { TrainingWordCard } from '../components/TrainingWordCard';
-import { MAX_SAMPLES_PER_WORD, speechTrainer } from '../services/speechTrainer';
+import { MAX_SAMPLES_PER_WORD, MIN_READY_SAMPLES_TO_FINALIZE, speechTrainer } from '../services/speechTrainer';
 import type { TrainedWord } from '../types/training.types';
 import type { Word } from '../../words/types/word.types';
 import { isPcmCaptureAvailable, startPcmCaptureAsync, stopActivePcmCaptureAsync } from '../../communication/services/audioAnalysis/pcmCapture';
@@ -42,8 +42,11 @@ export function TrainingScreen({ words, trainedWords, onWordsChange, onTrainedWo
   const editingWord = editingWordId ? words.find((word) => word.id === editingWordId) ?? null : null;
   const samples = selectedTraining?.samples ?? [];
   const readySamples = samples.filter((sample) => sample.analysisStatus === 'ready' && sample.features);
-  const trainingProgress = Math.min(readySamples.length, 3);
-  const trainingStatus = readySamples.length >= 3 ? 'pronta para usar' : `${readySamples.length}/3 amostras prontas`;
+  const trainingProgress = Math.min(readySamples.length, MIN_READY_SAMPLES_TO_FINALIZE);
+  const trainingStatus =
+    readySamples.length >= MIN_READY_SAMPLES_TO_FINALIZE
+      ? 'pronta para usar'
+      : `${readySamples.length}/${MIN_READY_SAMPLES_TO_FINALIZE} amostras prontas`;
 
   useEffect(() => {
     if (!selectedWord && words[0]) {
@@ -175,27 +178,27 @@ export function TrainingScreen({ words, trainedWords, onWordsChange, onTrainedWo
     Alert.alert(
       'Remover palavra',
       hasSamples
-        ? 'A palavra será removida da lista, mas as amostras já gravadas não serão apagadas.'
+        ? 'A palavra e as amostras gravadas para ela serão apagadas deste aparelho.'
         : 'A palavra será removida da lista de treinamento.',
       [
         { text: 'Cancelar', style: 'cancel' },
         {
           text: 'Remover',
           style: 'destructive',
-          onPress: () => {
-            wordRepository
-              .removeCustomWord(selectedWord.id)
-              .then((nextWords) => {
-                onWordsChange(nextWords);
-                setSelectedWordId(nextWords[0]?.id ?? '');
-                setEditingWordId(null);
-                setWordText('');
-                setStatus('Palavra removida.');
-              })
-              .catch((error) => {
-                const message = error instanceof Error ? error.message : 'Não foi possível remover a palavra.';
-                setStatus(message);
-              });
+          onPress: async () => {
+            try {
+              const nextWords = await wordRepository.removeCustomWord(selectedWord.id);
+              const nextTrainedWords = await speechTrainer.removeWordTraining(selectedWord.id);
+              onWordsChange(nextWords);
+              onTrainedWordsChange(nextTrainedWords);
+              setSelectedWordId(nextWords[0]?.id ?? '');
+              setEditingWordId(null);
+              setWordText('');
+              setStatus(hasSamples ? 'Palavra e amostras removidas.' : 'Palavra removida.');
+            } catch (error) {
+              const message = error instanceof Error ? error.message : 'Não foi possível remover a palavra.';
+              setStatus(message);
+            }
           },
         },
       ],
@@ -253,20 +256,26 @@ export function TrainingScreen({ words, trainedWords, onWordsChange, onTrainedWo
       return;
     }
 
-    if (readySamples.length < 3) {
-      setStatus('Registre pelo menos 3 amostras prontas para concluir o treinamento.');
+    if (readySamples.length < MIN_READY_SAMPLES_TO_FINALIZE) {
+      setStatus(`Registre pelo menos ${MIN_READY_SAMPLES_TO_FINALIZE} amostras prontas para concluir o treinamento.`);
       return;
     }
 
-    const finalized = await speechTrainer.finalizeWordTraining(selectedWord.id);
-    if (finalized) {
-      onTrainedWordsChange(trainedWords.map((word) => (word.id === finalized.id ? finalized : word)));
-      setStatus('Treinamento concluído');
+    try {
+      const finalized = await speechTrainer.finalizeWordTraining(selectedWord.id);
+      if (finalized) {
+        onTrainedWordsChange(trainedWords.map((word) => (word.id === finalized.id ? finalized : word)));
+        setStatus('Treinamento concluído');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Não foi possível concluir o treinamento.';
+      setStatus(message);
+      Alert.alert('Treinamento incompleto', message);
     }
   }
 
   const canRecordMore = samples.length < MAX_SAMPLES_PER_WORD;
-  const canFinish = readySamples.length >= 3;
+  const canFinish = readySamples.length >= MIN_READY_SAMPLES_TO_FINALIZE;
   const isInteractionLocked = isRecording || isPreparing || isSavingSample;
 
   return (
@@ -326,7 +335,7 @@ export function TrainingScreen({ words, trainedWords, onWordsChange, onTrainedWo
         <Text variant="caption">{selectedWord?.isCustom ? 'Palavra criada pelo usuário.' : 'Palavra sugerida pelo app.'}</Text>
         <Text variant="caption">Treino: {trainingStatus}</Text>
         <Text variant="caption">
-          {trainingProgress}/3 amostras prontas para usar
+          {trainingProgress}/{MIN_READY_SAMPLES_TO_FINALIZE} amostras prontas para usar
         </Text>
         <Text variant="caption">
           {samples.length} de {MAX_SAMPLES_PER_WORD} amostras gravadas
@@ -361,7 +370,7 @@ export function TrainingScreen({ words, trainedWords, onWordsChange, onTrainedWo
         <Button title="Conversar agora" onPress={onOpenCommunication} disabled={!canFinish || isInteractionLocked} />
         <Button title="Salvar treino" onPress={handleFinishTraining} disabled={!canFinish || isInteractionLocked} variant="secondary" />
         <Text variant="caption" align="center">
-          {canFinish ? 'Esta palavra já pode ser usada em Exercitar e Comunicar.' : 'Ainda faltam amostras para usar esta palavra.'}
+          {canFinish ? 'Esta palavra já pode ser usada em Exercitar e Comunicar.' : 'Ainda faltam amostras prontas para usar esta palavra.'}
         </Text>
       </View>
     </ScreenContainer>

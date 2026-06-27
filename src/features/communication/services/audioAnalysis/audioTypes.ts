@@ -1,3 +1,12 @@
+export type AudioFrameFeature = {
+  relativeStart: number;
+  relativeDuration: number;
+  averageAmplitude: number;
+  maxAmplitude: number;
+  rmsEnergy: number;
+  zeroCrossingRate: number;
+};
+
 export type AudioFeatureVector = {
   durationMs: number;
   activeDurationMs?: number;
@@ -8,6 +17,7 @@ export type AudioFeatureVector = {
   zeroCrossingRate: number;
   energyEnvelope?: number[];
   zeroCrossingEnvelope?: number[];
+  frames?: AudioFrameFeature[];
   sampleCount: number;
 };
 

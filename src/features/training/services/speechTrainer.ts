@@ -7,6 +7,18 @@ import type { SpeechSample, TrainedWord } from '../types/training.types';
 
 const STORAGE_KEY = 'wspeak.trainedWords.v1';
 export const MAX_SAMPLES_PER_WORD = 5;
+export const MIN_READY_SAMPLES_TO_FINALIZE = 3;
+
+type SampleAnalysisResult =
+  | {
+      status: 'ready';
+      features: NonNullable<SpeechSample['features']>;
+      message: string;
+    }
+  | {
+      status: 'unsupported';
+      message: string;
+    };
 
 function createId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -24,25 +36,63 @@ function normalizeSample(sample: SpeechSample): SpeechSample {
   };
 }
 
-async function deleteAudioFileIfExists(audioUri?: string | null) {
+export async function analyzeSample(audioUri: string | null, pcmBuffer?: PcmAudioBuffer | null): Promise<SampleAnalysisResult> {
+  try {
+    if (pcmBuffer) {
+      return {
+        status: 'ready',
+        features: extractFeaturesFromPcm(pcmBuffer),
+        message: 'Amostra pronta para usar.',
+      };
+    }
+
+    if (audioUri) {
+      const analysis = await extractAudioFeatures(audioUri);
+
+      if (analysis.status === 'ready') {
+        return {
+          status: 'ready',
+          features: analysis.features,
+          message: 'Amostra pronta para usar.',
+        };
+      }
+
+      return {
+        status: 'unsupported',
+        message: analysis.message || 'Amostra salva, mas este áudio ainda não pôde ser analisado.',
+      };
+    }
+
+    return {
+      status: 'unsupported',
+      message: 'Amostra salva. Grave outra se o app não reconhecer bem.',
+    };
+  } catch (error) {
+    console.warn('Falha ao analisar amostra de fala.', error);
+    return {
+      status: 'unsupported',
+      message: 'Amostra salva, mas não consegui preparar este áudio para reconhecimento.',
+    };
+  }
+}
+
+export async function safeDeleteAudioFile(audioUri?: string | null) {
   if (!audioUri) {
     return;
   }
 
-  const info = await FileSystem.getInfoAsync(audioUri);
-  if (info.exists) {
-    await FileSystem.deleteAsync(audioUri, { idempotent: true });
+  try {
+    const info = await FileSystem.getInfoAsync(audioUri);
+    if (info.exists) {
+      await FileSystem.deleteAsync(audioUri, { idempotent: true });
+    }
+  } catch (error) {
+    console.warn('Falha ao apagar arquivo de áudio local.', error);
   }
 }
 
 async function deleteSampleAudioFiles(samples: SpeechSample[]) {
-  await Promise.all(
-    samples.map((sample) =>
-      deleteAudioFileIfExists(sample.audioUri).catch((error) => {
-        console.warn('Falha ao apagar arquivo de áudio local.', error);
-      }),
-    ),
-  );
+  await Promise.all(samples.map((sample) => safeDeleteAudioFile(sample.audioUri)));
 }
 
 export const speechTrainer = {
@@ -64,7 +114,7 @@ export const speechTrainer = {
     const existingWord = trainedWords.find((item) => item.id === word.id);
 
     if ((existingWord?.samples.length ?? 0) >= MAX_SAMPLES_PER_WORD) {
-      await deleteAudioFileIfExists(audioUri);
+      await safeDeleteAudioFile(audioUri);
       throw new Error(`Limite de ${MAX_SAMPLES_PER_WORD} amostras atingido para esta palavra.`);
     }
 
@@ -75,23 +125,19 @@ export const speechTrainer = {
       createdAt: new Date().toISOString(),
       analysisStatus: 'pending',
     };
-    const analysis = pcmBuffer
-      ? { status: 'ready' as const, features: extractFeaturesFromPcm(pcmBuffer) }
-      : audioUri
-        ? await extractAudioFeatures(audioUri)
-        : { status: 'unsupported' as const };
+    const analysis = await analyzeSample(audioUri, pcmBuffer);
     const sample: SpeechSample =
       analysis.status === 'ready'
         ? {
             ...baseSample,
             analysisStatus: 'ready',
-            analysisMessage: 'Amostra pronta para usar.',
+            analysisMessage: analysis.message,
             features: analysis.features,
           }
         : {
             ...baseSample,
             analysisStatus: 'unsupported',
-            analysisMessage: 'Amostra salva. Grave outra se o app não reconhecer bem.',
+            analysisMessage: analysis.message,
           };
 
     const index = trainedWords.findIndex((item) => item.id === word.id);
@@ -133,7 +179,20 @@ export const speechTrainer = {
 
     const sampleToDelete = trainedWords.flatMap((word) => word.samples).find((sample) => sample.id === sampleId);
     if (sampleToDelete) {
-      await deleteAudioFileIfExists(sampleToDelete.audioUri);
+      await safeDeleteAudioFile(sampleToDelete.audioUri);
+    }
+
+    await this.saveTrainedWords(nextWords);
+    return nextWords;
+  },
+
+  async removeWordTraining(wordId: string): Promise<TrainedWord[]> {
+    const trainedWords = await this.loadTrainedWords();
+    const wordToDelete = trainedWords.find((word) => word.id === wordId);
+    const nextWords = trainedWords.filter((word) => word.id !== wordId);
+
+    if (wordToDelete) {
+      await deleteSampleAudioFiles(wordToDelete.samples);
     }
 
     await this.saveTrainedWords(nextWords);
@@ -148,6 +207,12 @@ export const speechTrainer = {
       return null;
     }
 
+    const readySampleCount = current.samples.filter((sample) => sample.analysisStatus === 'ready' && sample.features).length;
+
+    if (readySampleCount < MIN_READY_SAMPLES_TO_FINALIZE) {
+      throw new Error(`Grave pelo menos ${MIN_READY_SAMPLES_TO_FINALIZE} amostras prontas para usar antes de concluir este treino.`);
+    }
+
     const finalized = {
       ...current,
       trainedAt: new Date().toISOString(),
@@ -159,7 +224,13 @@ export const speechTrainer = {
 
   async updateWordText(wordId: string, text: string): Promise<TrainedWord[]> {
     const trainedWords = await this.loadTrainedWords();
-    const nextWords = trainedWords.map((word) => (word.id === wordId ? { ...word, text } : word));
+    const trimmedText = text.trim();
+
+    if (!trimmedText) {
+      throw new Error('Digite uma palavra para salvar.');
+    }
+
+    const nextWords = trainedWords.map((word) => (word.id === wordId ? { ...word, text: trimmedText } : word));
 
     await this.saveTrainedWords(nextWords);
     return nextWords;

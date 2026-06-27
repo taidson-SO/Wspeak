@@ -47,7 +47,7 @@ Objetivo: confirmar que palavras criadas pelo usuario aparecem no treinamento de
 10. Selecione a palavra, toque em `Editar palavra`, altere o texto e salve.
 11. Toque em `Remover palavra` e confirme.
 
-Resultado esperado: a palavra pode ser adicionada, editada e removida da lista. Ao remover uma palavra com amostras, o app avisa que as amostras ja gravadas nao serao apagadas.
+Resultado esperado: a palavra pode ser adicionada, editada e removida da lista. Ao remover uma palavra com amostras, o app avisa que as amostras gravadas para ela tambem serao apagadas deste aparelho.
 
 ## Baixa confianca no reconhecimento
 

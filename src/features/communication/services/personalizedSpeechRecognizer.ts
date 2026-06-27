@@ -1,6 +1,6 @@
 import { compareAudioFeatures, extractAudioFeatures } from './audioAnalysis';
 import { extractFeaturesFromPcm } from './audioAnalysis';
-import type { PcmAudioBuffer } from './audioAnalysis';
+import type { AudioFeatureExtractionResult, PcmAudioBuffer } from './audioAnalysis';
 import type { TrainedWord } from '../../training/types/training.types';
 import type { RecognitionResult } from '../types/communication.types';
 
@@ -8,6 +8,7 @@ export const MIN_RECOGNITION_CONFIDENCE = 0.75;
 const LOW_CONFIDENCE_MARGIN = 0.045;
 const MEDIUM_CONFIDENCE_MARGIN = 0.03;
 const HIGH_CONFIDENCE_MARGIN = 0.018;
+const TOP_SAMPLE_COUNT_FOR_WORD_SCORE = 3;
 
 function getRequiredConfidenceMargin(confidence: number) {
   if (confidence >= 0.9) {
@@ -22,12 +23,35 @@ function getRequiredConfidenceMargin(confidence: number) {
 }
 
 function calculateWordSimilarity(scores: number[]) {
-  const bestSimilarity = Math.max(...scores);
-  const averageSimilarity = scores.reduce((sum, score) => sum + score, 0) / scores.length;
-  const variation = scores.reduce((sum, score) => sum + Math.abs(score - averageSimilarity), 0) / scores.length;
+  const sortedScores = [...scores].sort((left, right) => right - left);
+  const bestSimilarity = sortedScores[0] ?? 0;
+  const topScores = sortedScores.slice(0, TOP_SAMPLE_COUNT_FOR_WORD_SCORE);
+  const averageTopSimilarity = topScores.reduce((sum, score) => sum + score, 0) / Math.max(1, topScores.length);
+  const variation = topScores.reduce((sum, score) => sum + Math.abs(score - averageTopSimilarity), 0) / Math.max(1, topScores.length);
   const consistency = Math.max(0, 1 - variation);
 
-  return bestSimilarity * 0.55 + averageSimilarity * 0.35 + consistency * 0.1;
+  return bestSimilarity * 0.5 + averageTopSimilarity * 0.35 + consistency * 0.15;
+}
+
+async function analyzeCurrentAudio(audioUri: string | null, pcmBuffer?: PcmAudioBuffer | null): Promise<AudioFeatureExtractionResult> {
+  try {
+    if (pcmBuffer) {
+      return { status: 'ready', sourceFormat: 'pcm', features: extractFeaturesFromPcm(pcmBuffer) };
+    }
+
+    if (audioUri) {
+      return await extractAudioFeatures(audioUri);
+    }
+  } catch (error) {
+    console.warn('Falha ao analisar áudio para reconhecimento.', error);
+  }
+
+  return {
+    status: 'unsupported',
+    reason: 'PCM_NOT_AVAILABLE',
+    sourceFormat: null,
+    message: 'Nenhuma origem de áudio analisável foi fornecida.',
+  };
 }
 
 export const personalizedSpeechRecognizer = {
@@ -59,16 +83,7 @@ export const personalizedSpeechRecognizer = {
       };
     }
 
-    const currentAnalysis = pcmBuffer
-      ? { status: 'ready' as const, sourceFormat: 'pcm' as const, features: extractFeaturesFromPcm(pcmBuffer) }
-      : audioUri
-        ? await extractAudioFeatures(audioUri)
-        : {
-            status: 'unsupported' as const,
-            reason: 'PCM_NOT_AVAILABLE' as const,
-            sourceFormat: null,
-            message: 'Nenhuma origem de áudio analisável foi fornecida.',
-          };
+    const currentAnalysis = await analyzeCurrentAudio(audioUri, pcmBuffer);
 
     if (currentAnalysis.status !== 'ready') {
       return {
